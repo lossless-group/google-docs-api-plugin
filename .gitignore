@@ -8,6 +8,8 @@
 *.iml
 .idea
 
+client_secret.json
+
 # npm
 node_modules
 

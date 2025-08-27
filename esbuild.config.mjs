@@ -48,6 +48,13 @@ const context = await esbuild.context({
   target: 'es2022',
   treeShaking: true,
   sourcemap: !isProduction ? 'inline' : false,
+  define: {
+    'process.env.NODE_ENV': JSON.stringify(isProduction ? 'production' : 'development'),
+    'process.env.GOOGLE_CLIENT_ID': JSON.stringify(process.env.GOOGLE_CLIENT_ID || ''),
+    'process.env.GOOGLE_CLIENT_SECRET': JSON.stringify(process.env.GOOGLE_CLIENT_SECRET || ''),
+    'process.env.GOOGLE_API_KEY': JSON.stringify(process.env.GOOGLE_API_KEY || ''),
+    'process.env.GOOGLE_REDIRECT_URI': JSON.stringify(process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/oauth2callback')
+  },
   minify: isProduction,
   define: {
     'process.env.NODE_ENV': `"${isProduction ? 'production' : 'development'}"`,

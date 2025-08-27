@@ -1,42 +1,103 @@
-import { Notice, Plugin, Editor, MarkdownView } from 'obsidian';
-// Import your services here
-import { processSiteUuidForFile } from './src/services/siteUuidService';
+import { Notice, Plugin, Editor, MarkdownView, MarkdownFileInfo } from 'obsidian';
+import { google } from 'googleapis';
+import { SimpleGoogleAuth } from './src/utils/SimpleGoogleAuth';
+
+// Environment variables are now handled by esbuild configuration
 import { BacklinkUrlService } from './src/services/backlinkUrlService';
-// Import your modals here  
+// Import modals
 import { BatchDirectoryModal } from './src/modals/BatchDirectoryModal';
 import { CurrentFileModal } from './src/modals/CurrentFileModal';
+import { GoogleDocImportModal } from './src/modals/GoogleDocImportModal';
+// Import settings
+import { GoogleDocsSettings, DEFAULT_GOOGLE_DOCS_SETTINGS, GoogleDocsSettingTab } from './src/settings/GoogleDocsSettings';
 // Import your utilities here
 // import { yourUtility } from './src/utils/yourUtility';
 
-export default class StarterPlugin extends Plugin {
+interface GoogleDocsPluginSettings {
+    googleDocs: GoogleDocsSettings;
+}
+
+export default class GoogleDocsPlugin extends Plugin {
+    private settings: GoogleDocsPluginSettings = { googleDocs: { ...DEFAULT_GOOGLE_DOCS_SETTINGS } };
+    
+    private async loadSettings() {
+        this.settings = Object.assign(
+            { googleDocs: { ...DEFAULT_GOOGLE_DOCS_SETTINGS } },
+            await this.loadData()
+        );
+    }
+    
+    private async saveSettings() {
+        await this.saveData(this.settings);
+    }
+    
+    private handleSettingsChange = async (settings: GoogleDocsSettings) => {
+        this.settings.googleDocs = settings;
+        await this.saveSettings();
+    };
+    
+    private async openGoogleDocs() {
+        new GoogleDocImportModal(this.app, this.importGoogleDoc.bind(this)).open();
+    }
+
+    private googleAuth!: SimpleGoogleAuth;
+
     async onload(): Promise<void> {
+        console.log('Loading Google Docs plugin');
+        
+        // Initialize Google Auth
+        this.googleAuth = new SimpleGoogleAuth(this);
+        
+        // Load settings
+        await this.loadSettings();
+        
+        // Add settings tab
+        this.addSettingTab(new GoogleDocsSettingTab(
+            this.app,
+            this,
+            this.handleSettingsChange.bind(this)
+        ));
+        
         // Load CSS
         this.loadStyles();
         
-        // Add ribbon icon for Insert URL from Backlink
+        // Add ribbon icon for Google Docs
         const ribbonIconEl = this.addRibbonIcon(
-            'link',
-            'Insert URL from Backlink',
-            async () => {
-                const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-                if (activeView && activeView.editor) {
-                    const backlinkService = new BacklinkUrlService(this.app);
-                    const result = await backlinkService.processBacklinkAtCursor(activeView.editor);
-                    
-                    if (result.success) {
-                        new Notice(result.message, 4000);
-                    } else {
-                        new Notice(result.message, 5000);
-                    }
-                } else {
-                    new Notice('Please open a markdown file first');
-                }
+            'file-text',
+            'Open Google Docs',
+            () => {
+                this.openGoogleDocs();
             }
         );
-        ribbonIconEl.addClass('insert-backlink-url-ribbon-icon');
         
-        // Register commands
-        this.registerCommands();
+        // Add command to import Google Doc
+        this.addCommand({
+            id: 'import-google-doc',
+            name: 'Import Google Doc',
+            callback: () => {
+                new GoogleDocImportModal(this.app, this.importGoogleDoc.bind(this)).open();
+            }
+        });
+
+        // Add command to process backlinks
+        this.addCommand({
+            id: 'process-backlink',
+            name: 'Process Backlink',
+            editorCallback: async (editor: Editor, _ctx: MarkdownView | MarkdownFileInfo) => {
+                const backlinkService = new BacklinkUrlService(this.app);
+                const result = await backlinkService.processBacklinkAtCursor(editor);
+                
+                if (result.success) {
+                    new Notice(result.message, 4000);
+                } else {
+                    new Notice(result.message, 5000);
+                }
+            }
+        });
+        
+        if (ribbonIconEl) {
+            ribbonIconEl.addClass('insert-backlink-url-ribbon-icon');
+        }
         
         // Register command to open Batch Directory Modal
         this.addCommand({
@@ -55,9 +116,61 @@ export default class StarterPlugin extends Plugin {
                 new CurrentFileModal(this.app, editor).open();
             }
         });
-        
-        // Add additional command groups as needed
-        // this.registerAdditionalCommands();
+    }
+
+    private async importGoogleDoc(docId: string) {
+        try {
+            new Notice(`Importing Google Doc: ${docId}...`);
+            
+            // Check if environment variables are set
+            if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+                throw new Error('Missing required environment variables. Please check your .env file.');
+            }
+
+            // Get authenticated client
+            const auth = await this.googleAuth.getAuthClient();
+            const docs = google.docs({ version: 'v1', auth });
+            
+            // Get the document
+            const doc = await docs.documents.get({
+                documentId: docId
+            });
+            
+            // Convert to markdown (simplified)
+            const title = doc.data.title || 'Untitled Document';
+            let content = `# ${title}\n\n`;
+            
+            // Process document content (you'll want to enhance this)
+            if (doc.data.body?.content) {
+                content += this.extractText(doc.data.body.content);
+            }
+            
+            // Create a new note with the content
+            const filePath = `${this.settings.googleDocs.defaultFolder}/${title}.md`;
+            await this.app.vault.create(filePath, content);
+            
+            new Notice(`Successfully imported: ${title}`);
+            
+        } catch (error) {
+            console.error('Error importing Google Doc:', error);
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+            new Notice(`Error importing document: ${errorMessage}`);
+        }
+    }
+    
+    private extractText(content: any[]): string {
+        // This is a simplified version - you'll want to enhance this
+        // to handle different types of content (paragraphs, lists, etc.)
+        return content
+            .map(item => {
+                if (item.paragraph) {
+                    return item.paragraph.elements
+                        .map((el: any) => el.textRun?.content || '')
+                        .join('');
+                }
+                return '';
+            })
+            .join('\n\n');
     }
     
     private loadStyles() {
@@ -73,120 +186,4 @@ export default class StarterPlugin extends Plugin {
         
         console.log('Plugin styles loaded - styles.css is automatically loaded by Obsidian');
     }
-
-    private registerCommands(): void {
-        // Example command with modal
-        this.addCommand({
-            id: 'open-modal-command',
-            name: 'Open Modal Command',
-            editorCallback: (_editor: Editor) => {
-                // Example: Open a modal
-                // new YourModal(this.app, editor).open();
-                new Notice('Modal command triggered - implement your modal here');
-            }
-        });
-
-        // Example command with text processing
-        this.addCommand({
-            id: 'process-content-command',
-            name: 'Process Content Command', 
-            editorCallback: async (_editor: Editor) => {
-                try {
-                    // const content = editor.getValue();
-                    
-                    // Example: Process the content with your service
-                    // const result = yourService.processContent(content);
-                    // if (result.changed) {
-                    //     editor.setValue(result.content);
-                    //     new Notice(`Processed successfully`);
-                    // } else {
-                    //     new Notice('No changes needed');
-                    // }
-                    
-                    new Notice('Content processing command - implement your logic here');
-                } catch (error) {
-                    const errorMsg = error instanceof Error ? error.message : String(error);
-                    new Notice('Error processing content: ' + errorMsg);
-                }
-            }
-        });
-
-        // Example command for cursor operations
-        this.addCommand({
-            id: 'insert-at-cursor-command',
-            name: 'Insert at Cursor Command',
-            editorCallback: (editor: Editor) => {
-                try {
-                    const cursor = editor.getCursor();
-                    const textToInsert = 'Example text'; // Replace with your logic
-                    
-                    // Insert text at cursor
-                    editor.replaceRange(textToInsert, cursor);
-                    
-                    new Notice('Text inserted at cursor');
-                } catch (error) {
-                    const errorMsg = error instanceof Error ? error.message : String(error);
-                    new Notice('Error inserting text: ' + errorMsg);
-                }
-            }
-        });
-
-        // Add site_uuid command
-        this.addCommand({
-            id: 'add-site-uuid',
-            name: 'Add Site UUID',
-            callback: async () => {
-                try {
-                    const activeFile = this.app.workspace.getActiveFile();
-                    if (!activeFile) {
-                        new Notice('No active file found');
-                        return;
-                    }
-
-                    // Check if it's a markdown file
-                    if (activeFile.extension !== 'md') {
-                        new Notice('Site UUID can only be added to Markdown files');
-                        return;
-                    }
-
-                    new Notice('Adding site UUID...', 2000);
-                    const result = await processSiteUuidForFile(activeFile);
-                    
-                    if (result.success) {
-                        const message = result.hadExistingUuid 
-                            ? `Updated site UUID: ${result.uuid}`
-                            : `Added site UUID: ${result.uuid}`;
-                        new Notice(message, 5000);
-                    } else {
-                        new Notice(`Failed to add site UUID: ${result.message}`, 5000);
-                    }
-                } catch (error) {
-                    const errorMsg = error instanceof Error ? error.message : String(error);
-                    new Notice('Error adding site UUID: ' + errorMsg, 5000);
-                }
-            }
-        });
-    }
-
-    // Additional command groups can be registered here as needed
-    // private registerSelectionCommands(): void {
-    //     this.addCommand({
-    //         id: 'process-selection-command',
-    //         name: 'Process Selection Command',
-    //         editorCallback: (editor: Editor) => {
-    //             const selection = editor.getSelection();
-    //             if (!selection) {
-    //                 new Notice('Please select some text first');
-    //                 return;
-    //             }
-    //             
-    //             // Example: Process the selection
-    //             // const processed = yourService.processSelection(selection);
-    //             // editor.replaceSelection(processed);
-    //             
-    //             editor.replaceSelection(selection.toUpperCase()); // Example transformation
-    //             new Notice('Selection processed successfully');
-    //         }
-    //     });
-    // }
 }
