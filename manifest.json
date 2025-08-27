@@ -1,0 +1,11 @@
+{
+	"id": "obsidian-google-docs",
+	"name": "Google Docs Connector",
+	"version": "0.0.1",
+	"minAppVersion": "1.8.10",
+	"description": "This connects Obsidian to Google Docs for easy document management and collaboration.",
+	"author": "The Lossless Group",
+	"authorUrl": "https://lossless.group",
+	"fundingUrl": "https://lossless.group",
+	"isDesktopOnly": true
+}
